@@ -1,0 +1,73 @@
+#pragma kernel ChunkKernel
+struct grassStruct {
+    uint packedXZR; // RRRRRRRR RRRRZZZZ ZZZZZZXX XXXXXXXX
+    float height;
+    //uint color;
+};
+RWStructuredBuffer<grassStruct> GrassBuffer;
+
+sampler2D TerrainHeight;
+uint heightmapDimensions;
+sampler2D TerrainColor;
+float3 terrainSize;
+float4x4 terrainTransform;
+
+uint2 chunkCoords;
+float2 chunkSize;
+
+float rand(float2 seed) 
+{
+    return frac(sin(dot(seed, float2(12.9898, 78.233))) * 43758.5453);
+}
+int wang_hash(uint seed)
+{
+    seed = (seed ^ 61) ^ (seed >> 16);
+    seed *= 9;
+    seed = seed ^ (seed >> 4);
+    seed *= 0x27d4eb2d;
+    seed = seed ^ (seed >> 15);
+    return seed;
+}
+
+shared float3 minB, maxB;
+
+[numthreads(64,1,1)]
+void ChunkKernel(uint3 id : SV_DispatchThreadID)
+{
+    //float3 pos = float3(rand(float2(id.x * 33, id.x * 273) + chunkCoords), 0, rand(float2(id.x * 983, id.x * 6234) + chunkCoords)); // random position inside chunk
+    float rx = frac(float(wang_hash(id.x + chunkCoords.x + chunkCoords.y * 1000)) / 4294967296.0);
+    float ry = frac(float(wang_hash(id.x * 3234 + chunkCoords.x + chunkCoords.y * 1000)) / 4294967296.0);
+    float3 pos = saturate(float3(rx, 0, ry)); // random position inside chunk
+    //pos *= chunkSize;
+    float3 wpos = pos;
+    wpos.xz += chunkCoords; // position in chunk grid space
+    wpos.xz *= chunkSize;
+    float2 uv = wpos.xz / terrainSize.xz; // uv for terrain textures
+
+    // account for power of 2 + 1
+    float pixelSize = 1 / float(heightmapDimensions);
+    uv /= 1 + pixelSize;
+    uv += pixelSize / 2;
+
+    pos.y = tex2Dlod(TerrainHeight, float4(uv, 0, 0)).r * terrainSize.y * 2;
+
+    float3 color = tex2Dlod(TerrainColor, float4(uv, 0, 0)).rgb;
+
+    grassStruct packed;
+
+    uint posx = uint(saturate(pos.x) * 1023.0); // pack into 10 bits
+    uint posz = uint(saturate(pos.z) * 1023.0); // pack into 10 bits
+    float rotFloat = float(wang_hash(id.x * 718 + chunkCoords.x + chunkCoords.y * 1000)) / 4294967296.0;
+    uint random = wang_hash(id.x * 718 + chunkCoords.x + chunkCoords.y * 1000) & 0xFFF; // pack into 12 bits
+
+    packed.packedXZR = posx;
+    packed.packedXZR += posz << 10;
+    packed.packedXZR += random << 20;
+    packed.height = pos.y;
+
+    //packed.color = uint(saturate(color.r) * 255.0);
+    //packed.color += uint(saturate(color.g) * 255.0) << 8;
+    //packed.color += uint(saturate(color.b) * 255.0) << 16;
+
+    GrassBuffer[id.x] = packed;
+}

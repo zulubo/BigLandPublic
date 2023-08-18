@@ -1,0 +1,57 @@
+#pragma kernel CSMain
+#include "AtmosphereCommon.hlsl"
+#include "RaymarchCommon.hlsl"
+
+RWTexture3D<float4> AerialPerspectiveLuminance;
+RWTexture3D<float4> AerialPerspectiveTransmittance;
+sampler2D TransmittanceLUT;
+
+uint3 size;
+float nearClip;
+float farClip;
+int numScatteringSteps;
+float3 camPlane;
+
+[numthreads(8,8,8)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+	if (id.x >= size.x || id.y >= size.y || id.z >= size.z) { return; }
+
+	float2 uv = id.xy / (size.xy - 1.0);
+	float depthT = id.z / (size.z - 1.0);
+
+	// remap depth to log curve
+	depthT = saturate(0.11111111 * (pow(10, depthT) - 1));
+
+	//AerialPerspectiveLuminance[id] = depthT;
+	//return;
+
+	float3 rayDir = calculateViewDir(uv);
+	float3 rayPos = camPos + rayDir * nearClip;
+
+	float2 atmosphereHitInfo = raySphere(0, atmosphereRadius, rayPos, rayDir);
+	float dstToAtmosphere = atmosphereHitInfo.x;
+	float dstThroughAtmosphere = atmosphereHitInfo.y;
+	
+	float3 col = 0;
+	float3 transmittance = 1;
+	
+	if (dstThroughAtmosphere > 0) 
+	{
+		float2 planetHit = raySphere(0, planetRadius * 0.95, rayPos, rayDir);
+		dstThroughAtmosphere = min(dstThroughAtmosphere, planetHit.x - dstToAtmosphere);
+
+		float3 inPoint = rayPos + rayDir * dstToAtmosphere;
+		float maxRayLength = (farClip - nearClip) * depthT;
+		float rayLength = min(dstThroughAtmosphere, (maxRayLength - dstToAtmosphere));
+		ScatteringResult result = raymarch(inPoint, rayDir, rayLength, numScatteringSteps, TransmittanceLUT, id.xy, planetRadius * 0.95);
+		col = result.luminance;
+		transmittance = result.transmittance;
+	}
+	
+
+	float avgTransmittance = dot(transmittance, 1/3.0);
+
+	AerialPerspectiveLuminance[id] = float4(col, avgTransmittance);
+	AerialPerspectiveTransmittance[id] = float4(transmittance, depthT);//
+}

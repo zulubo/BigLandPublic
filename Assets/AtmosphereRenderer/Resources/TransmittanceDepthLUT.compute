@@ -1,0 +1,32 @@
+﻿#pragma kernel CreateTransmittanceLUT
+#include "AtmosphereCommon.hlsl"
+
+RWTexture2D<float3> TransmittanceLUT;
+SamplerState transmittance_linear_clamp_sampler;
+
+uint width;
+uint height;
+
+[numthreads(8,8,1)]
+void CreateTransmittanceLUT (uint2 id : SV_DispatchThreadID)
+{
+	float2 uv = id / float2(width - 1, height - 1);
+	// bottom half is for in-atmosphere data
+	float elevation = planetRadius + atmosphereThickness * (uv.y / TRANSMITTANCE_LUT_SPACEPOS);
+	if (uv.y > TRANSMITTANCE_LUT_SPACEPOS)
+	{
+		// upper half is for outside-atmosphere data
+		elevation = atmosphereRadius * (1 + (uv.y - TRANSMITTANCE_LUT_SPACEPOS) / TRANSMITTANCE_LUT_SPACESIZE);
+	}
+
+	float3 inPoint = float3(0, elevation, 0);
+
+
+	float y = -2 * uv.x + 1;
+	float x = sin(acos(y));
+	float3 dir = float3(x, y, 0);
+	
+	float3 transmittance = getSunTransmittance(inPoint, dir);
+
+	TransmittanceLUT[id.xy] = transmittance;
+}
